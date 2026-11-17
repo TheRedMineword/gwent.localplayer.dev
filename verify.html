@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Discord verification</title>
+<style>
+  :root { --bg:#120b08; --card:#21130d; --text:#f4ead8; --muted:#c7b9a3; --gold:#d9ad55; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:20px;
+         background:var(--bg); color:var(--text); font-family:Georgia,"Times New Roman",serif; }
+  .card { width:min(600px,100%); padding:40px 32px; background:var(--card);
+          border:1px solid rgba(217,173,85,.4); border-radius:12px; box-shadow:0 20px 50px rgba(0,0,0,.5); }
+  h1 { margin:0 0 8px; font-size:clamp(24px,5vw,34px); text-align:center; }
+  .rule { width:90px; height:1px; margin:16px auto 24px; background:var(--gold); }
+  .status { text-align:center; color:var(--muted); }
+  .q { margin:0 0 22px; }
+  .q p { margin:0 0 10px; }
+  label { display:block; padding:9px 12px; margin:6px 0; cursor:pointer;
+          border:1px solid rgba(217,173,85,.3); border-radius:8px; }
+  label:has(input:checked) { border-color:var(--gold); background:rgba(217,173,85,.1); }
+  input { margin-right:8px; accent-color:var(--gold); }
+  .txt { width:100%; padding:9px 12px; font:inherit; color:var(--text); background:transparent;
+         border:1px solid rgba(217,173,85,.3); border-radius:8px; }
+  .txt:focus { outline:none; border-color:var(--gold); }
+  button { display:block; margin:24px auto 0; padding:10px 28px; font:inherit; color:var(--bg);
+           background:var(--gold); border:0; border-radius:20px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .ok { color:#9ad77a; } .bad { color:#e07a6a; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main class="card" aria-live="polite">
+  <h1>Discord verification</h1>
+  <div class="rule"></div>
+  <div id="status" class="status">Checking your link…</div>
+  <form id="quiz" hidden></form>
+</main>
+
+<script>
+(async () => {
+  // ---- config ------------------------------------------------------------
+  const local = ['localhost', '127.0.0.1'].includes(location.hostname);
+  const API = local ? 'http://localhost:8081/' : 'https://drmineword-gwent.onrender.com/';
+  const VALIDATE_JS = 'javascript/browser/validate.js'; // same file careforaroundofgwent.html loads
+
+  const $status = document.getElementById('status');
+  const $quiz = document.getElementById('quiz');
+  const say = (t, cls = '') => { $status.className = 'status ' + cls; $status.textContent = t; };
+  const post = (p, body) => fetch(API + p, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(r => r.json());
+
+  // ---- read #auth=... and remove it from the address bar -------------------
+  const auth = new URLSearchParams(location.hash.slice(1)).get('auth');
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!auth) return say('This link is missing its token. Request a new one from the bot.', 'bad');
+
+  try {
+    // 1. validate token (signature, expiry, single use) on the server
+    const start = await post('api/dcverify/start', { auth });
+    if (!start.ok) {
+      const msg = { expired: 'This link has expired.', already_used: 'This link was already used.' }[start.error]
+        || 'This link is not valid.';
+      return say(msg + ' Request a new one from the bot.', 'bad');
+    }
+    const sid = start.sid;
+
+    // 2. human check via the existing validate.js, pointed at the session-bound endpoint
+    say('Checking that you are human…');
+    await new Promise((ok, err) => {
+      const s = document.createElement('script');
+      s.src = VALIDATE_JS + '?ver=1'; s.onload = ok; s.onerror = err;
+      document.head.appendChild(s);
+    });
+    const scan = await init_scan_is_human(`${API}api/dcverify/bot-check?sid=${encodeURIComponent(sid)}`);
+    if (!scan.human) return say('Verification failed. Request a new link from the bot.', 'bad');
+
+    // 3. questions (answers stay on the server)
+    const ch = await fetch(`${API}api/dcverify/challenge?sid=${encodeURIComponent(sid)}`).then(r => r.json());
+    if (!ch.ok) return say('Could not load the questions. Request a new link.', 'bad');
+
+    say('Answer these questions to finish:');
+    ch.questions.forEach((q, i) => {
+      const div = document.createElement('div'); div.className = 'q';
+      const p = document.createElement('p'); p.textContent = `${i + 1}. ${q.q}`; div.appendChild(p);
+      if (q.type === 'text') {
+        const t = document.createElement('input');
+        t.type = 'text'; t.name = 'q' + i; t.required = true; t.maxLength = 100;
+        t.autocomplete = 'off'; t.className = 'txt'; div.appendChild(t);
+      } else q.options.forEach((opt, j) => {
+        const l = document.createElement('label');
+        const r = document.createElement('input');
+        r.type = 'radio'; r.name = 'q' + i; r.value = j; r.required = true;
+        l.append(r, document.createTextNode(opt)); div.appendChild(l);
+      });
+      $quiz.appendChild(div);
+    });
+    const btn = document.createElement('button'); btn.textContent = 'Submit'; $quiz.appendChild(btn);
+    $quiz.hidden = false;
+
+    $quiz.addEventListener('submit', async (e) => {
+      e.preventDefault(); btn.disabled = true;
+      const answers = ch.questions.map((q, i) => q.type === 'text' ? $quiz.elements['q' + i].value : Number($quiz.elements['q' + i].value));
+      const res = await post('api/dcverify/answer', { sid, answers });
+      $quiz.hidden = true;
+      if (res.ok && res.passed) say('Verified! You can return to Discord – the bot will confirm shortly.', 'ok');
+      else say('Wrong answers. Request a new link from the bot to try again.', 'bad');
+    });
+  } catch (err) {
+    console.error(err);
+    say('Something went wrong. Try again later.', 'bad');
+  }
+})();
+</script>
+</body>
+</html>

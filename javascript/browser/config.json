@@ -1,0 +1,16 @@
+{
+    "allowedVerdicts": [
+        "human"
+    ],
+    "maxScore": 41,
+    "minConfidence": 60,
+    "allowVPN": true,
+    "allowHosting": true,
+    "maxNetworkRisk": 30,
+    "allowWebDriver": true,
+    "requireCanvas": true,
+    "requireAudio": true,
+    "requireWebGL": true,
+    "failOnSuspicious": true,
+    "enforceSecondaryChecks": false
+}
